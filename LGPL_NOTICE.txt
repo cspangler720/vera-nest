@@ -1,0 +1,5 @@
+Notice: This application uses the CasADi library (v3.7.2), which is 
+licensed under the GNU Lesser General Public License v3 (LGPLv3). 
+You may obtain the source code for CasADi at https://github.com/casadi/casadi.
+Users are permitted to modify this library and relink it with this 
+application for their own use.
