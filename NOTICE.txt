@@ -1,0 +1,8 @@
+This application uses the following third-party software:
+
+1. CasADi (LGPLv3): Source available at https://github.com
+2. aiohttp (Apache 2.0): https://github.com
+3. Matplotlib (PSF): See LICENSE_PSF.txt
+4. CadQuery OCP (Apache 2.0): Manually verified (previously UNKNOWN)
+
+For full license details, see the licenses.txt and individual LICENSE files.

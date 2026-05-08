@@ -1,0 +1,12 @@
+{
+  "parameters": {
+    "KERF": 1.524,
+    "TOLERANCE": 0.635,
+    "TAPER_ANGLE": 3
+  },
+  "units": {
+    "KERF": "mm",
+    "TOLERANCE": "mm",
+    "TAPER_ANGLE": "degrees"
+  }
+}
