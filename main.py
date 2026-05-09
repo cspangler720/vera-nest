@@ -20,7 +20,7 @@ from util import read_json, read_csv
 
 def main():
     # machine parameters are expected to be in mm and degrees
-    machine_parameters = read_json('machineParameters.json')["parameters"]
+    machine_parameters = read_json('.\data\machineParameters.json')["parameters"]
 
     file_paths = filedialog.askopenfilenames(
         defaultextension=".STEP",
@@ -34,7 +34,7 @@ def main():
 
     thickness_groups = nesting.group_thickness(parts_data)
 
-    sheets = read_csv('sheets.csv')
+    sheets = read_csv('.\data\sheets.csv')
 
     if sheets:
         sheet_width, sheet_height = ui.create_sheet_selection_gui(sheets)
@@ -47,10 +47,10 @@ def main():
     # assuming all files are in the same folder
     folder_path = os.path.dirname(os.path.abspath(file_paths[0]))
     folder_name = os.path.basename(folder_path)
+
+    machine_pad = machine_parameters["KERF"] + machine_parameters["TOLERANCE"] 
     for thickness, parts_in_group in thickness_groups.items():
-        pad = machine_parameters["KERF"] 
-        + machine_parameters["TOLERANCE"] 
-        + thickness * cos(machine_parameters["TAPER_ANGLE"] * 0.01744)
+        pad = machine_pad + thickness * cos(machine_parameters["TAPER_ANGLE"] * 0.01744)
 
         sorted_parts = nesting.sort(parts_in_group)
         placed_parts = nesting.trueshape_nesting(sorted_parts, sheet_width,
