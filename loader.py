@@ -42,8 +42,10 @@ def load_model(file_name: str) -> Optional[models.PartData]:
         part = cq.importers.importStep(file_path)
         thickness, thickness_dir = identify_thickness(part)
         reoriented_part = reorient(part, thickness_dir)
-        return models.PartData(filename=file_name, part=reoriented_part,
-            thickness=thickness)
+        part_data = models.PartData(filename=file_name, part=reoriented_part,
+            thickness=thickness, footprint=None) 
+        part_data.footprint = part_data.planar_projection()
+        return part_data
     
     except Exception as e:
         print(f"Failed to load {file_path}: {e}")
