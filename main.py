@@ -70,23 +70,26 @@ def main():
         # alignment checker will print information if the model is not aligned
         # we do not need the return bool from it through
         
-        # get yield
-        nested_bbox = nested_model.combine().val().BoundingBox()
-        nested_area = nested_bbox.xlen * nested_bbox.ylen
-
-        bottom_faces = nested_model.faces("Z").filter(lambda f: f.Center().z < 1e-5)
-        part_area = sum(f.Area() for f in bottom_faces.objects)
-        z_floor = nested_bbox.zmin 
-        bottom_faces = nested_model.faces("<Z").filter(lambda f: abs(f.Center().z - z_floor) < 1e-3)
-        part_area = sum(f.Area() for f in bottom_faces.objects)
-
-        sheet_area = sheet_width * sheet_height
-        nest_yield =  part_area / (nested_area + 0.0001)
-        sheet_yield = part_area / sheet_area
-        rect_yield = (sheet_area - nested_area) / sheet_area
-        print(f"Nest yield: {nest_yield}\nSheet yield: {sheet_yield}\nRectangular yield: {rect_yield}")
-
+        get_yield(nested_model, sheet_width, sheet_height)
         cq.exporters.export(nested_model, output_path, exportType="STEP")
+
+
+def get_yield(nested_model: cq.Workplane, sheet_width: float, sheet_height: float):
+    nested_bbox = nested_model.combine().val().BoundingBox()
+    nested_area = nested_bbox.xlen * nested_bbox.ylen
+
+    bottom_faces = nested_model.faces("Z").filter(lambda f: f.Center().z < 1e-5)
+    part_area = sum(f.Area() for f in bottom_faces.objects)
+    z_floor = nested_bbox.zmin 
+    bottom_faces = nested_model.faces("<Z").filter(lambda f: abs(f.Center().z - z_floor) < 1e-3)
+    part_area = sum(f.Area() for f in bottom_faces.objects)
+
+    sheet_area = sheet_width * sheet_height
+    nest_yield =  part_area / (nested_area + 0.0001)
+    sheet_yield = part_area / sheet_area
+    rect_yield = (sheet_area - nested_area) / sheet_area
+    print(f"Nest yield: {nest_yield}\nSheet yield: {sheet_yield}\nRectangular yield: {rect_yield}")
+
 
 if __name__ == "__main__":
     main()

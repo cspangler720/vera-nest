@@ -20,6 +20,7 @@ def get_solids(part: cq.Workplane) -> cq.Workplane:
         print(f"No solids found in {part}")
     return solids
 
+
 def read_json(file_path: str) -> Dict:
     if not os.path.exists(file_path):
         print(f"JSON file not found: {file_path}")
@@ -28,6 +29,7 @@ def read_json(file_path: str) -> Dict:
     with open(file_path, 'r') as file:
         dictionary = json.load(file)
     return dictionary
+
 
 def read_csv(file_path: str) -> List[List[float]]:
     if not os.path.exists(file_path):

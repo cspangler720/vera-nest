@@ -28,22 +28,22 @@ def group_thickness(parts_data: List[models.PartData]) -> Dict[float, List[model
     return thickness_groups
 
 
-def bounding_box(solid: cq.Workplane.solids) -> Tuple[float, float]:
+def _bounding_box(solid: cq.Workplane.solids) -> Tuple[float, float]:
     bbox = solid.BoundingBox() 
     return bbox.xlen, bbox.ylen
 
 
-def area(part_data: models.PartData) -> float:  
-    width, height = bounding_box(get_solids(part_data.part)[0])
+def _area(part_data: models.PartData) -> float:  
+    width, height = _bounding_box(get_solids(part_data.part)[0])
     return width * height
 
 
 # this could be updated to sort based on some sort of ml algorithm
-def sort(parts_data: List[models.PartData]) -> List[models.PartData]:
-    return sorted(parts_data, key=area, reverse=True)
+def _sort(parts_data: List[models.PartData]) -> List[models.PartData]:
+    return sorted(parts_data, key=_area, reverse=True)
 
 
-def search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon], 
+def _search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon], 
                       tolerance: float) -> List[Tuple[float, float]]:
     candidates = set()
     bin_minx, bin_miny, bin_maxx, bin_maxy = bin_polygon.bounds
@@ -77,13 +77,13 @@ def search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon],
     return sorted(candidates, key=lambda p: (p[1], p[0]))
 
 
-def place_part(part_polygon: Polygon, bin_polygon: Polygon, 
+def _place_part(part_polygon: Polygon, bin_polygon: Polygon, 
                placed_parts: List[Polygon], tolerance: float, 
                pad: float) -> Tuple[float, float, float, bool]:
     part = part_polygon
     padded_part = part.buffer(pad)
     rotated_parts = [rotate(padded_part, angle, origin="center") for angle in ANGLES]
-    candidates = search_candidates(bin_polygon, placed_parts, tolerance)
+    candidates = _search_candidates(bin_polygon, placed_parts, tolerance)
 
     for angle, rotated_part in zip(ANGLES, rotated_parts):
         p_minx, p_miny, _, _ = rotated_part.bounds
@@ -108,11 +108,11 @@ def nest(parts_data: List[models.PartData], bin_w: float, bin_h: float,
     placed_polys = []  # polygons padded for kerf and cut tolerance 
     result = []  # final models with the appropriate translation and rotation in space
 
-    sorted_parts = sort(parts_data)
+    sorted_parts = _sort(parts_data)
 
     for part_data in sorted_parts:
         part_polygon = part_data.footprint
-        x, y, angle, success = place_part(part_polygon, bin_poly,placed_polys, 
+        x, y, angle, success = _place_part(part_polygon, bin_poly,placed_polys, 
                                           tolerance, pad)
         if not success:
             continue
@@ -132,49 +132,12 @@ def model_nest(placed_parts: List[cq.Workplane]) -> cq.Workplane:
     """Combine nested parts into a single CadQuery model for export"""
     result = cq.Workplane("XY")
     for part in placed_parts: 
-        aligned_part = reset_z(part)
+        aligned_part = _reset_z(part)
         result = result.add(aligned_part) 
     return result
 
 
-def align_z(part: cq.Workplane) -> cq.Workplane:
-    """Align z-axis and set bottom of part to z=0"""
-    # currently this is not working because something in the 
-    # nesting function breaks the z-alignement.
-    # further this cannot be used in model_nest because it
-    # can cause unexpected rotations 
-    solids = part.solids().vals()
-    aligned_solids = []
-    
-    target = np.array([0, 0, -1])
-
-    for solid in solids:
-        f = max(solid.Faces(), key=lambda f: f.Area())
-        n_val = f.normalAt()
-        n = np.array([n_val.x, n_val.y, n_val.z])
-        
-        n = n / np.linalg.norm(n)
-
-        cross_vec = np.cross(n, target)
-        cross_len = np.linalg.norm(cross_vec)
-        dot_val = np.dot(n, target)
-
-        if cross_len > 1e-6:
-            axis = tuple(cross_vec / cross_len)
-            angle = np.degrees(np.arccos(np.clip(dot_val, -1.0, 1.0)))
-            solid = solid.rotate((0, 0, 0), axis, angle)
-        elif dot_val < 0:
-            solid = solid.rotate((0, 0, 0), (1, 0, 0), 180)
-
-        z_min = solid.BoundingBox().zmin
-        solid = solid.translate((0, 0, -z_min))
-        
-        aligned_solids.append(solid)
-
-    return cq.Workplane("XY").newObject(aligned_solids)
-
-
-def reset_z(part: cq.Workplane) -> cq.Workplane:
+def _reset_z(part: cq.Workplane) -> cq.Workplane:
     """Set bottom of part to z=0"""
     solids = part.solids().vals()
     aligned_solids = []

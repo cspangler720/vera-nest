@@ -14,21 +14,21 @@ from util import get_solids
 
 def load_models(model_names: List[str]) -> List[models.PartData]:
     """Loads STEP files and return custom PartData objects (see models module)."""
-    models_are_valid = validate_model_extensions(model_names)
+    models_are_valid = _validate_model_extensions(model_names)
     if not models_are_valid:
         print("One or more files were found to not be STEP files")
         return []
 
     parts_data = []
     for file_name in model_names:
-        part_data = load_model(file_name)
+        part_data = _load_model(file_name)
         if part_data:
             parts_data.append(part_data)
 
     return parts_data
 
 
-def validate_model_extensions(file_list):
+def _validate_model_extensions(file_list):
     valid_extensions = {'.step', '.stp'}
     for file in file_list:
         if not any(file.lower().endswith(ext) for ext in valid_extensions):
@@ -36,12 +36,12 @@ def validate_model_extensions(file_list):
     return True
 
 
-def load_model(file_name: str) -> Optional[models.PartData]:
+def _load_model(file_name: str) -> Optional[models.PartData]:
     file_path = file_name # this may need updated logic in the future for pathing
     try:
         part = cq.importers.importStep(file_path)
-        thickness, thickness_dir = identify_thickness(part)
-        reoriented_part = reorient(part, thickness_dir)
+        thickness, thickness_dir = _identify_thickness(part)
+        reoriented_part = _reorient(part, thickness_dir)
         part_data = models.PartData(filename=file_name, part=reoriented_part,
             thickness=thickness, footprint=None) 
         part_data.footprint = part_data.planar_projection()
@@ -52,7 +52,7 @@ def load_model(file_name: str) -> Optional[models.PartData]:
         return None
 
 
-def identify_thickness(part: cq.Workplane) -> Tuple[float, str]:
+def _identify_thickness(part: cq.Workplane) -> Tuple[float, str]:
     """Determine the thickness and its direction (x, y, or z)."""
 
     solid = get_solids(part)[0]
@@ -76,7 +76,7 @@ def identify_thickness(part: cq.Workplane) -> Tuple[float, str]:
     return min_dim, thickness_dir
 
 
-def reorient(part: cq.Workplane, thickness_dir: str) -> cq.Workplane:
+def _reorient(part: cq.Workplane, thickness_dir: str) -> cq.Workplane:
     """Reorient the part so the thickness aligns with the Z-axis."""
     if thickness_dir == "x":
         part = part.rotate((0, 0, 0), (0, 1, 0), 90)
