@@ -5,17 +5,14 @@
 # This file depends on third-party libraries (including LGPL and Apache 2.0 components).
 # Refer to THIRD-PARTY-NOTICES.txt for a full list of dependencies and their licenses.
 
-from typing import List, Tuple, Dict
+from typing import List, Dict
 
 import numpy as np
 import cadquery as cq
-from shapely.geometry import Polygon, box
-from shapely.affinity import translate, rotate
 
 import models
-from util import get_solids
 
-ANGLES = [0, 45, 90, 135, 180, 225, 270, 315]
+MAGIC_VALUE = -1000000
 
 
 def group_thickness(parts_data: List[models.PartData]) -> Dict[float, List[models.PartData]]:
@@ -28,118 +25,186 @@ def group_thickness(parts_data: List[models.PartData]) -> Dict[float, List[model
     return thickness_groups
 
 
-def _bounding_box(solid: cq.Workplane.solids) -> Tuple[float, float]:
-    bbox = solid.BoundingBox() 
-    return bbox.xlen, bbox.ylen
+def _sort(parts_data: List[models.PartData]) -> List[cq.Workplane]:
+    sorted_parts_data = sorted(parts_data, key=lambda p: p.part.val().BoundingBox().xlen, reverse=True)
+    return [p.part for p in sorted_parts_data]
 
 
-def _area(part_data: models.PartData) -> float:  
-    width, height = _bounding_box(get_solids(part_data.part)[0])
-    return width * height
-
-
-# this could be updated to sort based on some sort of ml algorithm
-def _sort(parts_data: List[models.PartData]) -> List[models.PartData]:
-    return sorted(parts_data, key=_area, reverse=True)
-
-
-def _search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon], 
-                      tolerance: float) -> List[Tuple[float, float]]:
-    candidates = set()
-    bin_minx, bin_miny, bin_maxx, bin_maxy = bin_polygon.bounds
-
-    # Add bin corners
-    candidates.update([
-        (bin_minx, bin_miny),
-        (bin_maxx, bin_miny),
-        (bin_minx, bin_maxy),
-        (bin_maxx, bin_maxy),
-    ])
-
-    # Add points around placed parts
-    for placed in placed_parts:
-        p_minx, p_miny, p_maxx, p_maxy = placed.bounds
-        for x in np.arange(p_minx, p_maxx + tolerance, tolerance):
-            candidates.add((x, p_miny - tolerance))
-            candidates.add((x, p_maxy + tolerance))
-        for y in np.arange(p_miny, p_maxy + tolerance, tolerance):
-            candidates.add((p_minx - tolerance, y))
-            candidates.add((p_maxx + tolerance, y))
-
-    # Add points along bin edges
-    for x in np.arange(bin_minx, bin_maxx + tolerance, tolerance):
-        candidates.add((x, bin_miny))
-        candidates.add((x, bin_maxy))
-    for y in np.arange(bin_miny, bin_maxy + tolerance, tolerance):
-        candidates.add((bin_minx, y))
-        candidates.add((bin_maxx, y))
-
-    return sorted(candidates, key=lambda p: (p[1], p[0]))
-
-
-def _place_part(part_polygon: Polygon, bin_polygon: Polygon, 
-               placed_parts: List[Polygon], tolerance: float, 
-               pad: float) -> Tuple[float, float, float, bool]:
-    part = part_polygon
-    padded_part = part.buffer(pad)
-    rotated_parts = [rotate(padded_part, angle, origin="center") for angle in ANGLES]
-    candidates = _search_candidates(bin_polygon, placed_parts, tolerance)
-
-    for angle, rotated_part in zip(ANGLES, rotated_parts):
-        p_minx, p_miny, _, _ = rotated_part.bounds
-        for x, y in candidates:
-            xoff = x - p_minx
-            yoff = y - p_miny
-            candidate = translate(rotated_part, xoff=xoff, yoff=yoff)
-
-            if not bin_polygon.covers(candidate):
-                continue
-            if any(candidate.intersects(existing) for existing in placed_parts):
-                continue
-
-            return (xoff, yoff, angle, True)
-
-    return (0.0, 0.0, 0.0, False)
-
-
-def nest(parts_data: List[models.PartData], bin_w: float, bin_h: float,
-         tolerance: float = 2.0, pad: float = 0.5) -> List[Polygon]:
-    bin_poly = box(0, 0, bin_w, bin_h)
-    placed_polys = []  # polygons padded for kerf and cut tolerance 
-    result = []  # final models with the appropriate translation and rotation in space
-
-    sorted_parts = _sort(parts_data)
-
-    for part_data in sorted_parts:
-        part_polygon = part_data.footprint
-        x, y, angle, success = _place_part(part_polygon, bin_poly,placed_polys, 
-                                          tolerance, pad)
-        if not success:
+def _get_solids(parts: cq.Workplane, tol: float=0.1):
+    final_solids = []
+    solid_parts = parts.solids().all()
+    for part in solid_parts:
+        try: 
+            solids = part.solids
+        except Exception:
+            print(f"No solids found in {part}")
             continue
 
-        padded_part = part_polygon.buffer(pad)
-        rotated_padded = rotate(padded_part, angle, origin="center")
-        final_padded = translate(rotated_padded, xoff=x, yoff=y)
-        placed_polys.append(final_padded)
+        for _, solid in enumerate(solids):
+            merged = False
+            for j, existing in enumerate(final_solids):
+                if _is_nested(solid, existing, tol):
+                    final_solids[j] = existing.union(solid)
+                    merged = True
+                    break
+            if not merged:
+                final_solids.append(solid)
+    return final_solids
+	
 
-        placed_part = part_data.part.rotate((0,0,0), (0,0,1), angle).translate((x, y, 0))
-        result.append(placed_part)
+def center_distance(A, B):
+	return np.sqrt((A.x - B.x)**2 + (A.y - B.y)**2)
+	
+
+def _is_nested(solid1, solid2, tol):
+	c1 = solid1.center
+	c2 = solid2.center
+	if center_distance(c1, c2) < tol:
+		return True
+	return False
+
+def sort_row(parts):
+    order = sorted(parts, key=lambda part: part.val().BoundingBox().xlen, reverse=True)
+    longest = order[0]
+    for partA, partB, partC in zip(order, order[1:], order[2:]):
+        long_edgeA = partA.val().BoundingBox().xlen
+        long_edgeB = partB.val().BoundingBox().xlen
+        short_edgeB = partB.val().BoundingBox().ylen
+        long_edgeC = partC.val().BoundingBox().xlen
+        short_edgeC = partC.val().BoundingBox().ylen
+        return long_edgeA, long_edgeB, long_edgeC, short_edgeB, short_edgeC, longest
+    # WIP 
+    # sort for stack packing
+    return 
+
+    
+
+def check_x(x_prior, y_lower, y_upper, bin_x, bin_y, pad, boarder, part):
+	if x_prior + pad + part.val().BoundingBox().xlen <= bin_x - boarder:
+		# update Y_lower
+		return y_upper + pad
+	return y_lower
+
+
+def check_y(y_upper, bin_y, pad, boarder, part):
+	if y_upper + pad + part.val().BoundingBox().ylen <= bin_y - boarder: 
+		return False
+	return True # can place
+
+
+def check_stack(y_upper, x_prior, pad, part):
+	if y_upper <= part.val().BoundingBox().ylen + pad:
+		return True
+	return False # x_prior is passed here logic to be added 
+                 # later with the custom sort
+	
+
+def stack_y(y_prior, pad, part):
+	return y_prior + pad + part.val().BoundingBox().ylen
+	
+
+# x_prior isnt the x-value of the prior but the right edge of the part 
+def position(y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part):
+	if check_y(y_upper, bin_y, pad, boarder, part):
+		return MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE # need different returns
+	
+	# bottom-left corner coordinates
+	target_x, target_y = x_prior, y_prior + pad
+	can_stack = check_stack(y_upper, x_prior, pad, part)
+	if can_stack:
+		target_y = stack_y(y_prior, pad, part)
+	target_x = x_prior + pad
+	target_y = check_x(x_prior, y_lower, y_upper, bin_x, bin_y, pad, boarder, part)
+	return target_x, target_y, y_upper, target_x + part.val().BoundingBox().xlen, y_prior
+	
+
+def place(target_x, target_y, part):
+	return part.translate((target_x, target_y, 0))
+	
+
+def nest(bin_x, bin_y, boarder, pad, parts_data):
+    parts = _sort(parts_data)
+    first_part = parts[0]
+    parts.pop(0)
+    y_lower = boarder
+    x_prior = boarder
+    y_upper = first_part.val().BoundingBox().ylen
+    # make sure result is of type workplane
+    result = first_part.translate((boarder, boarder, 0))
+    x_prior = first_part.val().BoundingBox().xlen + boarder
+    y_prior = first_part.val().BoundingBox().ylen
+    target_x = x_prior
+    target_y = y_lower 
+    result.add(place(target_x, target_y, parts[0]))
+    parts.pop(0)
+    if not parts:
+        return result
+    for part in parts:
+        target_x, target_y, y_upper, x_prior, y_prior = position(y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part)
+        result.add(place(target_x, target_y, part))
+    return result
+  
+def new_nest(bin_x, bin_y, boarder, pad, parts_data):
+    parts = _sort(parts_data)
+    first_part = parts.pop(0)
+    
+    y_lower = boarder
+    x_prior = boarder
+    y_prior = boarder
+
+    result = first_part.translate((boarder, boarder, 0))
+    x_prior = first_part.val().BoundingBox().xlen + boarder
+    y_upper = first_part.val().BoundingBox().ylen + boarder
+    y_prior = first_part.val().BoundingBox().ylen + boarder
+
+    if not parts:
+        return result
+
+    for part in parts:
+        target_x, target_y, y_upper, x_prior, y_prior = position(
+            y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part
+        )
+        if target_x == MAGIC_VALUE: # position signals failure
+            continue
+        result.add(place(target_x, target_y, part))
 
     return result
 
+
+def normalize_axes(shape):
+    inertia = shape.Inertia()
+    com = inertia.com
+    moments = inertia.principal_moments 
+    axes = inertia.principal_axes       
+    sorted_pairs = sorted(zip(moments, axes), key=lambda x: x[0])
+    long_v = sorted_pairs[0][1]   # Target: X
+    mid_v  = sorted_pairs[1][1]   # Target: Y
+    short_v = sorted_pairs[2][1]  # Target: Z
+    rot_matrix = cq.Matrix([
+	    [long_v.x, mid_v.x, short_v.x, 0],
+	    [long_v.y, mid_v.y, short_v.y, 0],
+	    [long_v.z, mid_v.z, short_v.z, 0],
+	    [0, 0, 0, 1]
+	])
+    normalized = shape.translate(com.multiply(-1)).transformShape(rot_matrix.inverse())
+    z_min = normalized.BoundingBox().zmin
+    return normalized.translate(cq.Vector(0, 0, -z_min))
+    
 
 def model_nest(placed_parts: List[cq.Workplane]) -> cq.Workplane:
     """Combine nested parts into a single CadQuery model for export"""
     result = cq.Workplane("XY")
-    for part in placed_parts: 
-        aligned_part = _reset_z(part)
-        result = result.add(aligned_part) 
+    for part in placed_parts:
+        # Ensure the part is a Workplane with solids
+        if not hasattr(part, 'solids'):
+            raise ValueError(f"Expected a Workplane with solids, got {type(part)}")
+        aligned_part = _reset_z(part)  # part is expected to be a solid
+        result = result.add(aligned_part)
     return result
 
 
-def _reset_z(part: cq.Workplane) -> cq.Workplane:
+def _reset_z(solids) -> cq.Workplane:
     """Set bottom of part to z=0"""
-    solids = part.solids().vals()
     aligned_solids = []
     for solid in solids:
         z_min = solid.BoundingBox().zmin
@@ -150,27 +215,26 @@ def _reset_z(part: cq.Workplane) -> cq.Workplane:
     return cq.Workplane("XY").newObject(aligned_solids)
 
 
-def check_z_alignment(nest: cq.Workplane, thickness: float, tolerance = 1e-4) -> bool:
+def check_z_alignment(nest: cq.Workplane, thickness: float, thickness_str: str, tolerance = 1e-4) -> bool:
     """Checks if the tops and bottoms of the parts in a nest are aligned within a tolerances"""
-    thickness_str = round(thickness / 25.4)
     try:
-        solids = get_solids(nest)
+        solids = _get_solids(nest)
         bottom_faces_z = [solid.BoundingBox().zmin for solid in solids]
         top_faces_z = [solid.BoundingBox().zmax for solid in solids]
     except Exception as e:
-        print(f"Error verifying z-axis alignment on material thickness: {thickness_str}in: {e}")
+        print(f"Error verifying z-axis alignment on material thickness: {thickness_str}: {e}")
         return False
 
     # check if bottom faces are aligned at z=0
     avg_bottom_z = np.average(bottom_faces_z)
     if not np.isclose(avg_bottom_z, 0, atol=tolerance):
-        print(f"Bottom faces may not be aligned on material thickness: {thickness_str}in")
+        print(f"Bottom faces may not be aligned on material thickness: {thickness_str}")
         return False
 
     # check if top faces are aligned at the expected thickness
     avg_top_z = np.average(top_faces_z)
     if not np.isclose(avg_top_z, thickness, atol=tolerance):
-        print(f"Material thicknesses may not be the same on material thickness: {thickness_str}in")
+        print(f"Material thicknesses may not be the same on material thickness: {thickness_str}")
         return False
 
     return True

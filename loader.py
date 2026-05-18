@@ -43,8 +43,7 @@ def _load_model(file_name: str) -> Optional[models.PartData]:
         thickness, thickness_dir = _identify_thickness(part)
         reoriented_part = _reorient(part, thickness_dir)
         part_data = models.PartData(filename=file_name, part=reoriented_part,
-            thickness=thickness, footprint=None) 
-        part_data.footprint = part_data.planar_projection()
+            thickness=thickness) 
         return part_data
     
     except Exception as e:

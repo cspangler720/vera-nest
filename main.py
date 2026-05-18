@@ -44,10 +44,7 @@ def main():
             return
     else:
         raise ValueError("Sheets not found")
-
-    # assuming all files are in the same folder
-    folder_path = os.path.dirname(os.path.abspath(file_paths[0]))
-    folder_name = os.path.basename(folder_path)
+    
 
     machine_pad = machine_parameters["KERF"] + machine_parameters["TOLERANCE"] 
     for thickness, parts_in_group in thickness_groups.items():
@@ -56,22 +53,29 @@ def main():
         pad = 0.5 * (machine_pad + thickness * cos(machine_parameters["TAPER_ANGLE"] * 0.01744))
         print(f"The pad is {pad/25.4:.4f}-in")
 
-        placed_parts = nesting.nest(parts_in_group, 
-                                    sheet_width,
-                                    sheet_height, 
-                                    tolerance=2.0, 
-                                    pad=pad)
-
-        output_filename = f"{folder_name}_{thickness_str}in.STEP"
-        output_path = os.path.join(folder_path, output_filename)
+        placed_parts = nesting.nest(sheet_width, sheet_height, 0.125, pad, parts_in_group)
 
         nested_model = nesting.model_nest(placed_parts)
-        _ = nesting.check_z_alignment(nested_model, thickness)
+        _ = nesting.check_z_alignment(nested_model, thickness, thickness_str)
         # alignment checker will print information if the model is not aligned
         # we do not need the return bool from it through
         
         get_yield(nested_model, sheet_width, sheet_height)
-        cq.exporters.export(nested_model, output_path, exportType="STEP")
+        save_model(nested_model, file_paths, thickness_str)
+
+
+def visualize_output(result):
+    from cadquery.vis import show
+    show(result) 
+
+
+def save_model(nested_model, file_paths, thickness_str):
+    # assuming all files are in the same folder
+    folder_path = os.path.dirname(os.path.abspath(file_paths[0]))
+    folder_name = os.path.basename(folder_path)
+    output_filename = f"{folder_name}_{thickness_str}in.STEP"
+    output_path = os.path.join(folder_path, output_filename)
+    cq.exporters.export(nested_model, output_path, exportType="STEP")
 
 
 def get_yield(nested_model: cq.Workplane, sheet_width: float, sheet_height: float):
