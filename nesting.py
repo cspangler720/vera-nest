@@ -5,7 +5,7 @@
 # This file depends on third-party libraries (including LGPL and Apache 2.0 components).
 # Refer to THIRD-PARTY-NOTICES.txt for a full list of dependencies and their licenses.
 
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 import cadquery as cq
@@ -30,143 +30,163 @@ def _sort(parts_data: List[models.PartData]) -> List[cq.Workplane]:
     return [p.part for p in sorted_parts_data]
 
 
-def _get_solids(parts: cq.Workplane, tol: float=0.1):
+def _get_solids(parts: cq.Workplane, tol: float = 0.1):
+    """Extract and merge nested solids from a Workplane."""
     final_solids = []
     solid_parts = parts.solids().all()
     for part in solid_parts:
-        try: 
-            solids = part.solids
-        except Exception:
-            print(f"No solids found in {part}")
+        # .val() gives us the underlying Shape/Solid
+        solid = part.val()
+        if solid is None:
+            print(f"No solid found in part: {part}")
             continue
 
-        for _, solid in enumerate(solids):
-            merged = False
-            for j, existing in enumerate(final_solids):
-                if _is_nested(solid, existing, tol):
-                    final_solids[j] = existing.union(solid)
-                    merged = True
-                    break
-            if not merged:
-                final_solids.append(solid)
+        merged = False
+        for j, existing in enumerate(final_solids):
+            if _is_nested(solid, existing, tol):
+                final_solids[j] = existing.fuse(solid)  # use fuse for OCC shapes
+                merged = True
+                break
+        if not merged:
+            final_solids.append(solid)
+
     return final_solids
-	
 
-def center_distance(A, B):
-	return np.sqrt((A.x - B.x)**2 + (A.y - B.y)**2)
-	
 
-def _is_nested(solid1, solid2, tol):
-	c1 = solid1.center
-	c2 = solid2.center
-	if center_distance(c1, c2) < tol:
-		return True
-	return False
+def center_distance(A, B) -> float:
+    return np.sqrt((A.x - B.x) ** 2 + (A.y - B.y) ** 2)
 
-def sort_row(parts):
+
+def _is_nested(solid1, solid2, tol: float) -> bool:
+    c1 = solid1.Center()
+    c2 = solid2.Center()
+    if center_distance(c1, c2) < tol:
+        return True
+    return False
+
+
+def sort_row(parts: List[cq.Workplane]):
+    """Sort parts for row-based stack packing. WIP."""
     order = sorted(parts, key=lambda part: part.val().BoundingBox().xlen, reverse=True)
     longest = order[0]
+
+    result = []
+    # Iterate all triples — do NOT return inside the loop
     for partA, partB, partC in zip(order, order[1:], order[2:]):
         long_edgeA = partA.val().BoundingBox().xlen
         long_edgeB = partB.val().BoundingBox().xlen
         short_edgeB = partB.val().BoundingBox().ylen
         long_edgeC = partC.val().BoundingBox().xlen
         short_edgeC = partC.val().BoundingBox().ylen
-        return long_edgeA, long_edgeB, long_edgeC, short_edgeB, short_edgeC, longest
-    # WIP 
-    # sort for stack packing
-    return 
+        result.append((long_edgeA, long_edgeB, long_edgeC, short_edgeB, short_edgeC))
 
-    
-
-def check_x(x_prior, y_lower, y_upper, bin_x, bin_y, pad, boarder, part):
-	if x_prior + pad + part.val().BoundingBox().xlen <= bin_x - boarder:
-		# update Y_lower
-		return y_upper + pad
-	return y_lower
+    # WIP: use result + longest to drive stack packing order
+    return order
 
 
-def check_y(y_upper, bin_y, pad, boarder, part):
-	if y_upper + pad + part.val().BoundingBox().ylen <= bin_y - boarder: 
-		return False
-	return True # can place
+def check_x(x_prior: float, y_lower: float, y_upper: float,
+            bin_x: float, bin_y: float, pad: float, border: float,
+            part: cq.Workplane) -> Tuple[float, float]:
+    """
+    Check whether the part fits to the right of x_prior.
+    Returns (new_x, new_y): the bottom-left corner to place the part at.
+    If it doesn't fit horizontally, wrap to a new row starting at y_upper.
+    """
+    part_xlen = part.val().BoundingBox().xlen
+    if x_prior + pad + part_xlen <= bin_x - border:
+        # Fits in the current row
+        return x_prior + pad, y_lower
+    else:
+        # Start a new row
+        return border, y_upper + pad
 
 
-def check_stack(y_upper, x_prior, pad, part):
-	if y_upper <= part.val().BoundingBox().ylen + pad:
-		return True
-	return False # x_prior is passed here logic to be added 
-                 # later with the custom sort
-	
+def check_y(y_upper: float, bin_y: float, pad: float, border: float,
+            part: cq.Workplane) -> bool:
+    """Returns True if the part fits vertically (there is still room), False if it does not."""
+    return y_upper + pad + part.val().BoundingBox().ylen <= bin_y - border
 
-def stack_y(y_prior, pad, part):
-	return y_prior + pad + part.val().BoundingBox().ylen
-	
 
-# x_prior isnt the x-value of the prior but the right edge of the part 
-def position(y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part):
-	if check_y(y_upper, bin_y, pad, boarder, part):
-		return MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE, MAGIC_VALUE # need different returns
-	
-	# bottom-left corner coordinates
-	target_x, target_y = x_prior, y_prior + pad
-	can_stack = check_stack(y_upper, x_prior, pad, part)
-	if can_stack:
-		target_y = stack_y(y_prior, pad, part)
-	target_x = x_prior + pad
-	target_y = check_x(x_prior, y_lower, y_upper, bin_x, bin_y, pad, boarder, part)
-	return target_x, target_y, y_upper, target_x + part.val().BoundingBox().xlen, y_prior
-	
+def check_stack(y_upper: float, x_prior: float, pad: float,
+                part: cq.Workplane) -> bool:
+    """
+    Returns True if we can stack the part on top of the current row
+    (i.e. the part's height fits within y_upper).
+    """
+    return part.val().BoundingBox().ylen + pad <= y_upper
 
-def place(target_x, target_y, part):
-	return part.translate((target_x, target_y, 0))
-	
 
-def nest(bin_x, bin_y, boarder, pad, parts_data):
+def stack_y(y_prior: float, pad: float, part: cq.Workplane) -> float:
+    return y_prior + pad + part.val().BoundingBox().ylen
+
+
+def position(
+    y_lower: float, y_upper: float, x_prior: float, y_prior: float,
+    pad: float, border: float, bin_x: float, bin_y: float,
+    part: cq.Workplane
+) -> Tuple[float, float, float, float, float]:
+    """
+    Compute placement coordinates for a part.
+
+    Returns:
+        (target_x, target_y, new_y_upper, new_x_prior, new_y_prior)
+        All values are MAGIC_VALUE if the part cannot be placed.
+    """
+    FAIL = (MAGIC_VALUE,) * 5
+
+    if not check_y(y_upper, bin_y, pad, border, part):
+        return FAIL
+
+    target_x, target_y = check_x(x_prior, y_lower, y_upper, bin_x, bin_y, pad, border, part)
+
+    # If check_x wrapped to a new row, re-validate vertical fit from the new y
+    if target_x == border and target_y == y_upper + pad:
+        new_y_upper = target_y + part.val().BoundingBox().ylen
+        new_y_prior = target_y
+        new_x_prior = border + part.val().BoundingBox().xlen
+        return target_x, target_y, new_y_upper, new_x_prior, new_y_prior
+
+    # Same row placement
+    new_x_prior = target_x + part.val().BoundingBox().xlen
+    new_y_prior = target_y
+    new_y_upper = max(y_upper, target_y + part.val().BoundingBox().ylen)
+    return target_x, target_y, new_y_upper, new_x_prior, new_y_prior
+
+
+def place(target_x: float, target_y: float, part: cq.Workplane) -> cq.Workplane:
+    return part.translate((target_x, target_y, 0))
+
+
+def nest(bin_x: float, bin_y: float, border: float, pad: float,
+         parts_data: List[models.PartData]) -> Optional[cq.Workplane]:
+    """
+    Nest parts into a bin of size (bin_x, bin_y).
+    Returns a Workplane containing all placed parts, or None if no parts provided.
+    """
     parts = _sort(parts_data)
-    first_part = parts[0]
-    parts.pop(0)
-    y_lower = boarder
-    x_prior = boarder
-    y_upper = first_part.val().BoundingBox().ylen
-    # make sure result is of type workplane
-    result = first_part.translate((boarder, boarder, 0))
-    x_prior = first_part.val().BoundingBox().xlen + boarder
-    y_prior = first_part.val().BoundingBox().ylen
-    target_x = x_prior
-    target_y = y_lower 
-    result.add(place(target_x, target_y, parts[0]))
-    parts.pop(0)
     if not parts:
-        return result
-    for part in parts:
-        target_x, target_y, y_upper, x_prior, y_prior = position(y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part)
-        result.add(place(target_x, target_y, part))
-    return result
-  
-def new_nest(bin_x, bin_y, boarder, pad, parts_data):
-    parts = _sort(parts_data)
-    first_part = parts.pop(0)
-    
-    y_lower = boarder
-    x_prior = boarder
-    y_prior = boarder
+        return None
 
-    result = first_part.translate((boarder, boarder, 0))
-    x_prior = first_part.val().BoundingBox().xlen + boarder
-    y_upper = first_part.val().BoundingBox().ylen + boarder
-    y_prior = first_part.val().BoundingBox().ylen + boarder
+    # Place the first (largest) part at the border
+    first_part = parts.pop(0)
+    y_lower = border
+    x_prior = border + first_part.val().BoundingBox().xlen
+    y_prior = border
+    y_upper = border + first_part.val().BoundingBox().ylen
+
+    result = first_part.translate((border, border, 0))
 
     if not parts:
         return result
 
     for part in parts:
         target_x, target_y, y_upper, x_prior, y_prior = position(
-            y_lower, y_upper, x_prior, y_prior, pad, boarder, bin_x, bin_y, part
+            y_lower, y_upper, x_prior, y_prior, pad, border, bin_x, bin_y, part
         )
-        if target_x == MAGIC_VALUE: # position signals failure
+        if target_x == MAGIC_VALUE:
+            print(f"Warning: part {part} could not be placed — bin may be full.")
             continue
-        result.add(place(target_x, target_y, part))
+        result = result.add(place(target_x, target_y, part))
 
     return result
 
@@ -174,64 +194,67 @@ def new_nest(bin_x, bin_y, boarder, pad, parts_data):
 def normalize_axes(shape):
     inertia = shape.Inertia()
     com = inertia.com
-    moments = inertia.principal_moments 
-    axes = inertia.principal_axes       
+    moments = inertia.principal_moments
+    axes = inertia.principal_axes
     sorted_pairs = sorted(zip(moments, axes), key=lambda x: x[0])
-    long_v = sorted_pairs[0][1]   # Target: X
-    mid_v  = sorted_pairs[1][1]   # Target: Y
-    short_v = sorted_pairs[2][1]  # Target: Z
+    long_v = sorted_pairs[0][1]    # Target: X
+    mid_v = sorted_pairs[1][1]     # Target: Y
+    short_v = sorted_pairs[2][1]   # Target: Z
     rot_matrix = cq.Matrix([
-	    [long_v.x, mid_v.x, short_v.x, 0],
-	    [long_v.y, mid_v.y, short_v.y, 0],
-	    [long_v.z, mid_v.z, short_v.z, 0],
-	    [0, 0, 0, 1]
-	])
+        [long_v.x, mid_v.x, short_v.x, 0],
+        [long_v.y, mid_v.y, short_v.y, 0],
+        [long_v.z, mid_v.z, short_v.z, 0],
+        [0, 0, 0, 1]
+    ])
     normalized = shape.translate(com.multiply(-1)).transformShape(rot_matrix.inverse())
     z_min = normalized.BoundingBox().zmin
     return normalized.translate(cq.Vector(0, 0, -z_min))
-    
 
-def model_nest(placed_parts: List[cq.Workplane]) -> cq.Workplane:
-    """Combine nested parts into a single CadQuery model for export"""
-    result = cq.Workplane("XY")
-    for part in placed_parts:
-        # Ensure the part is a Workplane with solids
-        if not hasattr(part, 'solids'):
-            raise ValueError(f"Expected a Workplane with solids, got {type(part)}")
-        aligned_part = _reset_z(part)  # part is expected to be a solid
-        result = result.add(aligned_part)
+
+def model_nest(placed_parts: cq.Workplane) -> cq.Workplane:
+    """
+    Reset all solids in the nested Workplane to z=0 and return a clean Workplane.
+
+    nest() returns a single cq.Workplane whose context stack holds all placed
+    solids.  Iterating it directly yields raw Solid objects (via .vals()), so
+    we extract them through .solids().vals() which is the documented CadQuery
+    way to get a typed list of Solid shapes from a Workplane.
+    """
+    if not isinstance(placed_parts, cq.Workplane):
+        raise ValueError(f"model_nest expects a cq.Workplane, got {type(placed_parts)}")
+
+    result = _reset_z(placed_parts)
+    print(result.vals())
     return result
 
 
-def _reset_z(solids) -> cq.Workplane:
-    """Set bottom of part to z=0"""
+def _reset_z(workplane: cq.Workplane) -> cq.Workplane:
+    """Translate every solid in a Workplane so its bottom face sits at z=0."""
+    # .solids().vals() returns List[cq.occ_impl.shapes.Solid] — the correct
+    # CadQuery API for extracting typed solid shapes from a Workplane.
     aligned_solids = []
-    for solid in solids:
+    for solid in workplane.solids().vals():
         z_min = solid.BoundingBox().zmin
-        solid = solid.translate((0, 0, -z_min))
-        
-        aligned_solids.append(solid)
-    
+        aligned_solids.append(solid.translate((0, 0, -z_min)))
     return cq.Workplane("XY").newObject(aligned_solids)
 
 
-def check_z_alignment(nest: cq.Workplane, thickness: float, thickness_str: str, tolerance = 1e-4) -> bool:
-    """Checks if the tops and bottoms of the parts in a nest are aligned within a tolerances"""
+def check_z_alignment(nest: cq.Workplane, thickness: float,
+                      thickness_str: str, tolerance: float = 1e-4) -> bool:
+    """Check if tops and bottoms of all parts in a nest are aligned within tolerance."""
     try:
         solids = _get_solids(nest)
         bottom_faces_z = [solid.BoundingBox().zmin for solid in solids]
         top_faces_z = [solid.BoundingBox().zmax for solid in solids]
     except Exception as e:
-        print(f"Error verifying z-axis alignment on material thickness: {thickness_str}: {e}")
+        print(f"Error verifying z-axis alignment on material thickness {thickness_str}: {e}")
         return False
 
-    # check if bottom faces are aligned at z=0
     avg_bottom_z = np.average(bottom_faces_z)
     if not np.isclose(avg_bottom_z, 0, atol=tolerance):
         print(f"Bottom faces may not be aligned on material thickness: {thickness_str}")
         return False
 
-    # check if top faces are aligned at the expected thickness
     avg_top_z = np.average(top_faces_z)
     if not np.isclose(avg_top_z, thickness, atol=tolerance):
         print(f"Material thicknesses may not be the same on material thickness: {thickness_str}")
