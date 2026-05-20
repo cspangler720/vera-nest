@@ -37,7 +37,9 @@ def _clipper_to_shapely(paths: list, scale: int = _SCALE) -> Polygon | MultiPoly
     for path in paths:
         coords = [(x / scale, y / scale) for x, y in path]
         if len(coords) >= 3:
-            polys.append(Polygon(coords))
+            p = Polygon(coords).buffer(0)  # repair with buffer-zero
+            if not p.is_empty: 
+                polys.append(p)
     if not polys:
         return None
     return unary_union(polys)
@@ -249,3 +251,4 @@ def convex_hull_nfp(fixed: Polygon, orbiting: Polygon) -> Polygon | MultiPolygon
     Useful as a quick upper-bound / feasibility check.
     """
     return nfp(fixed.convex_hull, orbiting.convex_hull)
+    
