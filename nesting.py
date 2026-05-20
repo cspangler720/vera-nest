@@ -28,12 +28,12 @@ def group_thickness(parts_data: List[models.PartData]) -> Dict[float, List[model
     return thickness_groups
 
 
-def _bounding_box(solid: cq.Workplane.solids) -> Tuple[float, float]:
-    bbox = solid.BoundingBox() 
+def _bounding_box(solid) -> Tuple[float, float]:
+    bbox = solid.BoundingBox()
     return bbox.xlen, bbox.ylen
 
 
-def _area(part_data: models.PartData) -> float:  
+def _area(part_data: models.PartData) -> float:
     width, height = _bounding_box(get_solids(part_data.part)[0])
     return width * height
 
@@ -43,8 +43,8 @@ def _sort(parts_data: List[models.PartData]) -> List[models.PartData]:
     return sorted(parts_data, key=_area, reverse=True)
 
 
-def _search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon], 
-                      tolerance: float) -> List[Tuple[float, float]]:
+def _search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon],
+                       tolerance: float) -> List[Tuple[float, float]]:
     candidates = set()
     bin_minx, bin_miny, bin_maxx, bin_maxy = bin_polygon.bounds
 
@@ -77,11 +77,10 @@ def _search_candidates(bin_polygon: Polygon, placed_parts: List[Polygon],
     return sorted(candidates, key=lambda p: (p[1], p[0]))
 
 
-def _place_part(part_polygon: Polygon, bin_polygon: Polygon, 
-               placed_parts: List[Polygon], tolerance: float, 
-               pad: float) -> Tuple[float, float, float, bool]:
-    part = part_polygon
-    padded_part = part.buffer(pad)
+def _place_part(part_polygon: Polygon, bin_polygon: Polygon,
+                placed_parts: List[Polygon], tolerance: float,
+                pad: float) -> Tuple[float, float, float, bool]:
+    padded_part = part_polygon.buffer(pad)
     rotated_parts = [rotate(padded_part, angle, origin="center") for angle in ANGLES]
     candidates = _search_candidates(bin_polygon, placed_parts, tolerance)
 
@@ -103,18 +102,19 @@ def _place_part(part_polygon: Polygon, bin_polygon: Polygon,
 
 
 def nest(parts_data: List[models.PartData], bin_w: float, bin_h: float,
-         tolerance: float = 2.0, pad: float = 0.5) -> List[Polygon]:
+         tolerance: float = 2.0, pad: float = 0.5) -> List[cq.Workplane]:
     bin_poly = box(0, 0, bin_w, bin_h)
-    placed_polys = []  # polygons padded for kerf and cut tolerance 
-    result = []  # final models with the appropriate translation and rotation in space
+    placed_polys: List[Polygon] = []  # polygons padded for kerf and cut tolerance
+    result: List[cq.Workplane] = []   # final models with appropriate translation and rotation
 
     sorted_parts = _sort(parts_data)
 
     for part_data in sorted_parts:
         part_polygon = part_data.footprint
-        x, y, angle, success = _place_part(part_polygon, bin_poly,placed_polys, 
-                                          tolerance, pad)
+        x, y, angle, success = _place_part(part_polygon, bin_poly, placed_polys,
+                                            tolerance, pad)
         if not success:
+            print(f"Could not place: {part_data.filename}")
             continue
 
         padded_part = part_polygon.buffer(pad)
@@ -122,7 +122,7 @@ def nest(parts_data: List[models.PartData], bin_w: float, bin_h: float,
         final_padded = translate(rotated_padded, xoff=x, yoff=y)
         placed_polys.append(final_padded)
 
-        placed_part = part_data.part.rotate((0,0,0), (0,0,1), angle).translate((x, y, 0))
+        placed_part = part_data.part.rotate((0, 0, 0), (0, 0, 1), angle).translate((x, y, 0))
         result.append(placed_part)
 
     return result
@@ -131,9 +131,9 @@ def nest(parts_data: List[models.PartData], bin_w: float, bin_h: float,
 def model_nest(placed_parts: List[cq.Workplane]) -> cq.Workplane:
     """Combine nested parts into a single CadQuery model for export"""
     result = cq.Workplane("XY")
-    for part in placed_parts: 
+    for part in placed_parts:
         aligned_part = _reset_z(part)
-        result = result.add(aligned_part) 
+        result = result.add(aligned_part)
     return result
 
 
@@ -144,14 +144,12 @@ def _reset_z(part: cq.Workplane) -> cq.Workplane:
     for solid in solids:
         z_min = solid.BoundingBox().zmin
         solid = solid.translate((0, 0, -z_min))
-        
         aligned_solids.append(solid)
-    
     return cq.Workplane("XY").newObject(aligned_solids)
 
 
-def check_z_alignment(nest: cq.Workplane, thickness: float, tolerance = 1e-4) -> bool:
-    """Checks if the tops and bottoms of the parts in a nest are aligned within a tolerances"""
+def check_z_alignment(nest: cq.Workplane, thickness: float, tolerance=1e-4) -> bool:
+    """Checks if the tops and bottoms of the parts in a nest are aligned within a tolerance"""
     thickness_str = round(thickness / 25.4)
     try:
         solids = get_solids(nest)

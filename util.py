@@ -31,11 +31,18 @@ def read_json(file_path: str) -> Dict:
     return dictionary
 
 
-def read_csv(file_path: str) -> List[List[float]]:
+def read_csv(file_path: str) -> List[dict]:
+    rows = []
     if not os.path.exists(file_path):
         print(f"CSV file not found: {file_path}")
-        return []
-
-    with open(file_path, 'r') as file:
-        table = list(csv.reader(file))
-    return table
+        return rows
+    with open(file_path, newline='') as f:
+        reader = csv.DictReader(f)
+        print(repr(reader.fieldnames))
+        for row in reader:
+            rows.append({
+                "name": row["name"],
+                "width": float(row["width"]),
+                "height": float(row["height"]),
+            })
+    return rows
