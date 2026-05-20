@@ -38,7 +38,6 @@ def read_csv(file_path: str) -> List[dict]:
         return rows
     with open(file_path, newline='') as f:
         reader = csv.DictReader(f)
-        print(repr(reader.fieldnames))
         for row in reader:
             rows.append({
                 "name": row["name"],
