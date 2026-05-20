@@ -14,7 +14,7 @@ from shapely.geometry import Polygon, box, MultiPolygon
 from shapely.affinity import rotate
 
 from nfp import nfp as compute_nfp, nfp_inner, place, translate_to
-from util import get_solids
+from util import get_largest_solid
 
 @dataclass
 class PartData:
@@ -26,11 +26,7 @@ class PartData:
     thickness: float
 
     def planar_projection(self): # probably should wrap into the initialization
-        solids = sorted(get_solids(self.part), key=lambda s: s.Volume(), reverse=True)
-        if not solids:
-            raise ValueError("No solids found in the model.")
-        solid = solids[0]
-
+        solid = get_largest_solid(self.part)
         # Get the top face (highest z)
         face = sorted(solid.Faces(), key=lambda f: f.Center().z)[-1]
 

@@ -13,7 +13,14 @@ from typing import Dict, List
 import cadquery as cq
 
 
-def get_solids(part: cq.Workplane) -> cq.Workplane:
+def get_largest_solid(part: cq.Workplane) -> cq.Solid:
+    solids = sorted(get_solids(part), key=lambda s: s.Volume(), reverse=True)
+    if not solids:
+        raise ValueError("No solids found in the model.")
+    return solids[0]
+
+
+def get_solids(part: cq.Workplane) -> List[cq.Solid]:
     try: 
         solids = list(part.solids())  # body may contain more than one solid
     except ValueError:
