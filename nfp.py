@@ -7,13 +7,13 @@
 
 """This module was designed by me on paper and prompted into ClaudeAI for the math."""
 
-from typing import Tuple, Sequence
+from typing import Tuple, Sequence, List
 
 import numpy as np
 import pyclipper as clip
 
 from shapely.geometry import Polygon, MultiPolygon, Point
-from shapely.ops import unary_union
+from shapely.ops import unary_union, triangulate
 from shapely.affinity import translate
 
 _SCALE = 1000000
@@ -65,6 +65,48 @@ def _reflect(poly: Polygon) -> Polygon:
     return Polygon(reflected)
 
 
+def _is_convex(poly: Polygon) -> bool:
+    """Return True if poly is convex (area matches its convex hull)."""
+    return abs(poly.area - poly.convex_hull.area) < _TOLERANCE
+
+
+def _convex_decompose(poly: Polygon) -> List[Polygon]:
+    """Decompose a polygon into a minimum set of convex pieces.
+
+    Uses Delaunay triangulation of the interior followed by greedy merging
+    of adjacent triangles that together remain convex (Hertel-Mehlhorn style).
+    Convex polygons are returned as-is in a single-element list.
+    """
+    if _is_convex(poly):
+        return [poly]
+
+    tris = [t for t in triangulate(poly) if poly.contains(t.centroid)]
+    if not tris:
+        return [poly]
+
+    # greedy merge: combine adjacent pieces while the union stays convex
+    pieces = list(tris)
+    merged = True
+    while merged:
+        merged = False
+        i = 0
+        while i < len(pieces):
+            j = i + 1
+            while j < len(pieces):
+                candidate = pieces[i].union(pieces[j])
+                if (candidate.geom_type == 'Polygon'
+                        and _is_convex(candidate)
+                        and abs(candidate.area - pieces[i].area - pieces[j].area) < _TOLERANCE):
+                    pieces[i] = candidate
+                    pieces.pop(j)
+                    merged = True
+                else:
+                    j += 1
+            i += 1
+
+    return pieces
+
+
 def minkowski_sum(poly_A: Polygon, poly_B: Polygon) -> Polygon | MultiPolygon:
     perimiter_a = _exterior_coords(poly_A).tolist()
     perimiter_b = _exterior_coords(poly_B).tolist()
@@ -81,7 +123,12 @@ def minkowski_diff(poly_A: Polygon, poly_B: Polygon) -> Polygon | MultiPolygon:
 
 
 def nfp(sun: Polygon, planet: Polygon) -> Polygon | MultiPolygon:
-    """Orbiting computation of the planet polygon about the sun polygon
+    """Orbiting computation of the planet polygon about the sun polygon.
+
+    For convex inputs, delegates directly to minkowski_sum (fast path).
+    For concave inputs, decomposes each polygon into convex pieces, computes
+    the NFP for every sun-piece / planet-piece pair, then returns their union.
+    This guarantees a correct NFP regardless of input concavity.
 
     inspired by https://nestprofessor.com/articles/An%20improved%20method%20for%20calculating%20the%20no-fit%20polygon(Automatic%20nesting%20software).pdf
     Args:
@@ -91,14 +138,45 @@ def nfp(sun: Polygon, planet: Polygon) -> Polygon | MultiPolygon:
     Returns:
         Polygon | MultiPolygon: NFP (same item but my IDE yells at me if I use the type hints for just Polygon)
     """
-    # NFP = Minkowski sum of sun with the reflection of planet
-    return minkowski_sum(sun, _reflect(planet))
+    if _is_convex(sun) and _is_convex(planet):
+        # fast path: pyclipper MinkowskiSum is exact for convex inputs
+        return minkowski_sum(sun, _reflect(planet))
+
+    # concave path: decompose both into convex pieces, union all pairwise NFPs
+    nfps = []
+    for sun_piece in _convex_decompose(sun):
+        for planet_piece in _convex_decompose(planet):
+            n = minkowski_sum(sun_piece, _reflect(planet_piece))
+            if n is not None:
+                nfps.append(n)
+
+    return unary_union(nfps) if nfps else None
 
 
 def ifp(bin_poly: Polygon, part: Polygon) -> Polygon | MultiPolygon:
-    """Inner fit polygon"""
-    part_centered_origin = _center_poly(part)
-    return minkowski_diff(bin_poly, part_centered_origin)
+    """Inner fit polygon.
+
+    Returns the locus of valid positions for the bottom-left corner of `part`
+    such that `part` stays fully inside `bin_poly`.
+
+    Computed as the Minkowski erosion of bin_poly by part:
+        IFP = { p : part_anchored + p ⊆ bin_poly }
+           = ∩{ bin_poly translated by -v : v ∈ part_anchored }
+    where part_anchored has its bottom-left bbox corner at the origin.
+    This handles concave bins and parts correctly, unlike the Minkowski sum
+    approach which dilates rather than erodes.
+    """
+    # anchor part so its bottom-left bbox corner is the reference point at origin
+    minx, miny, _, _ = part.bounds
+    part_anchored = translate(part, -minx, -miny)
+
+    coords = list(part_anchored.exterior.coords)[:-1]
+    result = bin_poly
+    for bx, by in coords:
+        result = result.intersection(translate(bin_poly, -bx, -by))
+        if result.is_empty:
+            return result  # part cannot fit inside bin at any position
+    return result
 
 
 # alias for external callers
