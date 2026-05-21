@@ -10,7 +10,7 @@ from typing import List, Optional, Tuple
 import cadquery as cq
 
 import models
-from util import get_solids
+from util import get_solids, get_largest_solid
 
 
 def load_models(model_names: List[str]) -> List[models.PartData]:
@@ -76,12 +76,41 @@ def _identify_thickness(part: cq.Workplane) -> Tuple[float, str]:
     return min_dim, thickness_dir
 
 
+def _ideal_orient(part: cq.Workplane, step: float = 10):
+    def bbox_area(solid) -> float:
+        bb = solid.BoundingBox()
+        return bb.xlen * bb.ylen
+    
+    if len(get_solids(part)) > 1:
+        return part
+
+    largest_solid = get_largest_solid(part)
+
+    center = largest_solid.Center()
+    base = largest_solid.translate((-center.x, -center.y, 0))
+
+    best_shape = base
+    best_area = bbox_area(base)
+
+    for angle in range(step, 180 + step, step):
+        rotated = base.rotate((0, 0, 0), (0, 0, 1), angle)
+        area = bbox_area(rotated)
+
+        if area < best_area:
+            best_area = area
+            best_shape = rotated
+
+    return cq.Workplane("XY").newObject([best_shape])
+
+
 def _reorient(part: cq.Workplane, thickness_dir: str) -> cq.Workplane:
     """Reorient the part so the thickness aligns with the Z-axis."""
     if thickness_dir == "x":
         part = part.rotate((0, 0, 0), (0, 1, 0), 90)
     elif thickness_dir == "y":
         part = part.rotate((0, 0, 0), (1, 0, 0), -90)
+
+    part = _ideal_orient(part)
 
     # verify the part is flat on the XY plane after reorientation
     solids = get_solids(part)

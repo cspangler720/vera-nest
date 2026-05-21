@@ -8,7 +8,7 @@
 import json
 import csv
 import os
-from typing import Dict, List
+from typing import Dict
 
 import cadquery as cq
 
@@ -16,15 +16,19 @@ import cadquery as cq
 def get_largest_solid(part: cq.Workplane) -> cq.Solid:
     solids = sorted(get_solids(part), key=lambda s: s.Volume(), reverse=True)
     if not solids:
-        raise ValueError("No solids found in the model.")
+        raise ValueError(f"No solids found in {part}")
     return solids[0]
 
 
-def get_solids(part: cq.Workplane) -> List[cq.Solid]:
+def get_solids(part: cq.Workplane) -> list[cq.Solid]:
     try: 
         solids = list(part.solids())  # body may contain more than one solid
     except ValueError:
         print(f"No solids found in {part}")
+        return []
+    except Exception as e:
+        print(f"Error occured getting solids from {part}: {e}")
+        return []
     return solids
 
 
@@ -38,7 +42,7 @@ def read_json(file_path: str) -> Dict:
     return dictionary
 
 
-def read_csv(file_path: str) -> List[dict]:
+def read_csv(file_path: str) -> list[dict]:
     rows = []
     if not os.path.exists(file_path):
         print(f"CSV file not found: {file_path}")
