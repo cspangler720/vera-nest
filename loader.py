@@ -76,19 +76,30 @@ def _identify_thickness(part: cq.Workplane) -> Tuple[float, str]:
     return min_dim, thickness_dir
 
 
+def _is_nested(primary: cq.Solid, secondary: cq.Solid) -> bool:
+    primary_bbox = primary.BoundingBox()
+    secondary_bbox = secondary.BoundingBox()
+    # wip
+    pass
+
 def _ideal_orient(part: cq.Workplane, step: float = 10):
     def bbox_area(solid) -> float:
         bb = solid.BoundingBox()
         return bb.xlen * bb.ylen
     
-    if len(get_solids(part)) > 1:
-        return part
+    solids = get_solids(part)
+
+    if len(solids) > 1:
+        #sorted_solids = sorted(solids, key=lambda s: (s.BoundingBox().xmin, s.BoundingBox().ymin), reverse=True)
+        #result = cq.Workplane()
+        #for solid in sorted_solids:
+        #    result.add(solid)
+        # wip (this is currently throwing parts inside eachother)
+        return part #result
 
     largest_solid = get_largest_solid(part)
-
     center = largest_solid.Center()
     base = largest_solid.translate((-center.x, -center.y, 0))
-
     best_shape = base
     best_area = bbox_area(base)
 
@@ -99,7 +110,6 @@ def _ideal_orient(part: cq.Workplane, step: float = 10):
         if area < best_area:
             best_area = area
             best_shape = rotated
-
     return cq.Workplane("XY").newObject([best_shape])
 
 
